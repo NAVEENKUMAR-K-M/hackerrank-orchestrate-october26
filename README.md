@@ -1,157 +1,214 @@
-# HackerRank Orchestrate - October 2026
+# Ghost Data Still Exists
 
-## Ghost Data Still Exists
+An evidence-grounded deletion-audit agent for HackerRank Orchestrate, October 2026.
+It reconstructs current and historical identities, investigates participant evidence,
+applies the supplied retention policy, and produces findings, remediation, and
+verification steps at each request's audit_at cutoff.
 
-Build an AI agent that audits whether a user's personal data was actually deleted.
+## Validation status
 
-A deletion workflow may report **Complete** while data still exists in databases, logs, support attachments, exports, search indexes, archives, or backups. Sync and restore processes may also bring deleted data back.
+The previous Claude run audited all 518 requests (517 through the model-directed loop and one through a
+documented catalog-only fallback), validated 3,050 steps and 1,141 citations, and wrote the
+root output.csv. On the 32 public samples the Claude-backed agent completed 29 with 100% status
+accuracy on those, step precision 96.7%, recall 90.2%, and 17 exact sequences; cases 01, 02 and 04
+stay pending because their only link is a number suffix. Hidden-label accuracy for the 518
+requests is unknown locally. See [the evaluation report](code/evaluation/evaluation_report.md)
+and [usage report](code/evaluation/usage_report.md) for definitions, failures found and cost.
 
-For each request, the agent must first determine whether deletion was actually requested. It then returns `COMPLETE`, `INCOMPLETE`, or `NOT_APPLICABLE`, reports any remaining data or recreation risk, and produces the ordered remediation and verification steps required to finish an authorized deletion safely.
+Known limits: about 140 evaluation cases have an identity-free account or anonymized analytics
+record that cannot be uniquely tied to one request (requests sharing a report time), so those
+steps are omitted rather than guessed; audit-record IDs that appear nowhere in the data cannot be
+reported.
 
-Read [`problem_statement.md`](./problem_statement.md) for the complete challenge contract.
+## Setup
 
----
+Requirements: Python 3.12 or later and Claude Code CLI (`claude`, tested with 2.1.302)
+signed in with a Claude subscription. The CLI must support `-p`, `--json-schema`,
+`--tools ""`, `--safe-mode`, and stream-json input for screenshots.
 
-## Quick Start
+Create an environment and install the pinned dependencies:
 
-Clone the repository and move into the project directory:
+~~~powershell
+python -m venv .venv
+./.venv/Scripts/python.exe -m pip install -r requirements.txt
+~~~
 
-```bash
-git clone https://github.com/interviewstreet/hackerrank-orchestrate-october26.git
-cd hackerrank-orchestrate-october26
-```
+On macOS/Linux, use .venv/bin/python instead. Dependencies are Pydantic, pypdf,
+pypdfium2, and Pillow. SQLite and unittest are part of Python.
 
-Start your AI coding tool from the **repository root** so it automatically reads [`AGENTS.md`](./AGENTS.md) and logs your session turns to `log.txt` in the root directory.
+Sign the CLI into your own Claude account (once):
 
-Build your solution in `code/main.py`, or use another language and document its setup and run command clearly in your README.
+~~~powershell
+claude auth login
+claude auth status
+~~~
 
-Your solution must:
-
-- Read the input files from `dataset/`
-- Generate one prediction row for every request in `dataset/deletion_requests.csv`
-- Write the final predictions to `output.csv` in the repository root
-
-Run the starter Python entry point with:
-
-```bash
-python3 code/main.py
-```
-
-The blank template at `dataset/output.csv` is provided as a reference. Your final generated file for submission must be the root-level `output.csv`.
+If `claude` is not on PATH, set CLAUDE_BIN to its executable's absolute path.
+Credentials stay in Claude-managed storage; never copy them into this repository.
 
 
-## Dataset
+~~~powershell
+./.venv/Scripts/python.exe code/main.py preflight
+~~~
 
-All participant-facing files are in `dataset/`:
+The runtime requires Claude subscription authentication and strips
+ANTHROPIC_*, OPENAI_*, cloud-provider, and other API-key variables from the child
+environment, so it cannot silently switch to pay-as-you-go billing. Subscription
+usage limits still apply. A limit hit checkpoints the run; rerun the same command
+after the limit resets and completed cases are reused.
 
-| File | Contents |
-| --- | --- |
-| `deletion_requests.csv` | 518 requests |
-| `sample_deletion_requests.csv` | 32 sample requests |
-| `sample_output.csv` | Correct sample answers |
-| `user_identities.csv` | Current user identities |
-| `user_audit_log.csv` | Historical identity changes |
-| `system_activity.csv` | Activity across services and data processes |
-| `deletion_rules.csv` | Required treatment for each data category |
-| `evidence_files.csv` | Manifest of supplied evidence files |
-| `output.csv` | Blank output template |
+## Run
 
-Evidence is stored under `dataset/evidence/` and may include PDFs, images, logs, JSON, plain text, or SQL snapshot exports. SQL captures may contain a primary database, regional replicas, a reporting replica, or a failover replica so replication drift can be investigated directly. The `.sql` files are readable as text and executable with SQLite.
+Commands resolve the repository root from the entry point. Optional --root PATH
+and --model MODEL precede the subcommand. The default model is `sonnet` (Claude Sonnet 5.5) at medium effort.
 
-Only `deletion_requests.csv` requires answers. The other files provide evidence and context.
+~~~powershell
+./.venv/Scripts/python.exe code/main.py index
+./.venv/Scripts/python.exe code/main.py index --vision
+./.venv/Scripts/python.exe code/main.py audit --samples --smoke
+~~~
 
----
+The first command makes no model calls. The second interprets documents and
+screenshots using the subscription and caches grounded facts.
 
-## Output
+Use --case-id CASE_ID or --limit N on audit for a limited investigation.
+Run state, extracted facts, responses, tool decisions, and measured usage live
+under .runs/. Unchanged commands resume completed cases. Input, source, policy,
+prompt, parser, model, or budget changes invalidate appropriate caches.
+Completed checkpoints are rechecked against current evidence before reuse.
 
-Create `output.csv` with these columns in this exact order:
+~~~powershell
+./.venv/Scripts/python.exe code/main.py audit
+./.venv/Scripts/python.exe code/main.py validate
+./.venv/Scripts/python.exe code/main.py package
+~~~
 
-```text
-case_id,deletion_status,steps_json
-```
+The final output is repository-root output.csv, not dataset/output.csv. It has
+exactly case_id,deletion_status,steps_json, sorted by case ID, with one row per
+evaluation request. All steps use the prescribed fields, operations, states,
+citations, and ordering. NOT_APPLICABLE has an empty array.
 
-Produce exactly one row per request. `deletion_status` is `COMPLETE`, `INCOMPLETE`, or `NOT_APPLICABLE`. `steps_json` is an ordered JSON array containing findings, remediation actions, and verification checks. Use an empty array (`[]`) for `NOT_APPLICABLE`. Evidence references may be a `file_id`, `activity_id`, or `audit_id`. Determine the resource state at `audit_at` from the available evidence; reported workflow statuses and operation results are claims. Use `dataset/sample_output.csv` as the format reference.
+Exit 0 means completion. Exit 2 means setup, validation, quota, or unresolved
+investigation prevented completion. Limited/pending runs never publish the final CSV.
 
-The final file must contain 518 data rows sorted by `case_id` (plus the header row). The grader parses `steps_json` as JSON, so object-key order and whitespace do not matter; array order does. Order findings, remediation, and verification in that phase order. Within a phase, follow the operation order in the problem statement, then sort by `system_id` and `resource_id`.
+## Investigator architecture
 
----
+Python controls the investigation loop. Each Claude response is a strict JSON
+decision selecting up to six domain tool calls or proposing finalization. An
+explicit Python handler table dispatches calls; model text never becomes code.
 
-## Evaluation
+| Tool | Executed behavior |
+|---|---|
+| resolve_identity | Resolve current and historical identifiers at the cutoff |
+| search_evidence | Exact identity/resource retrieval and paginated source-text search |
+| inspect_resource | Inspect readbacks, replicas, and operational claims |
+| read_artifact | Read source text or request constrained evidence interpretation |
+| get_policy | Return supplied category rules and conditions |
+| check_coverage | Identify missing account proof, states, or interpretation |
 
-`output.csv` will be compared with hidden canonical answers. Scoring considers:
+The model first determines whether deletion is authorized. Non-deletion requests
+finish without probing identity or generating deletion actions. Deletion cases
+must resolve identity, inspect coverage, and accept an evidence-backed plan.
+Uncertain intent, missing proof, and rejected validation consume bounded repair
+opportunities and remain pending when unresolved.
+The model can stop early with specific missing facts. A persistent search journal
+tracks unread result pages across truncated conversation history.
 
-- deletion assessment accuracy;
-- current and historical identity resolution;
-- discovery of remaining data and recreation risks;
-- correct policy application and evidence references; and
-- completeness and ordering of remediation and verification steps.
+Defaults: eight decisions per case, two validation repairs, 180 seconds per
+invocation, 15 minutes per case, one inference process at a time. Transient errors
+receive at most two retries. Authentication and subscription-limit errors stop
+new inference. These are application limits, not hidden backend call counts.
 
-Your `code.zip` must include:
+Claude runs through `claude -p` in an isolated temporary directory with every built-in
+tool disabled (`--tools ""`), safe mode, no session persistence, no slash commands and no
+setting sources; the subscription login is used and API keys are stripped. Python owns domain
+tools; unexpected native tool events are rejected. Prompts and evidence are untrusted
+inputs. Capability tests do not establish complete prompt-injection resistance.
 
-```text
-code/evaluation/evaluation_report.md
-code/evaluation/usage_report.md
-```
+## Evidence and policy
 
-- `evaluation_report.md` must cover case, row, field, and sequence accuracy, at least three additional evaluation cases created by you, failures found, and improvements made.
-- `usage_report.md` must cover the final full-dataset run, including model providers and names, model calls, input and output tokens, total and average tokens per request, and estimated total and per-request cost. Include per-model and overall totals when using multiple models.
+The prediction loader allowlists participant inputs and rejects sample answers.
+Evidence paths must stay beneath dataset/evidence/. SQL executes only in isolated
+in-memory databases; disk attachment, extension loading, and unsafe pragmas are
+denied. Log traces preserve lookup identity while excluding stale cache results.
 
-**Important:** Place `evaluation_report.md` and `usage_report.md` inside `code/evaluation/` (matching `code/evaluation/main.py` in this starter layout), write your complete evaluation metrics, custom evaluation test cases, and token/cost breakdowns directly inside those Markdown files, and keep prompts in source code or Markdown files. Automated code evaluation ignores raw data files (`.csv`, `.tsv`, `.json`, `.jsonl`, `.sql`, `.log`), so content stored only in those formats will not be visible to the code judge or AI interviewer.
+Every observation carries a file ID, source location, capture time, observation
+time, system, resource, category, and replica. Exact current/historical emails,
+hashes, and normalized phones provide identity matches. Similar names, numeric
+suffixes, filename patterns, and case ordering do not establish ownership.
+Operational activity can discover relationships; success statuses do not prove state.
 
----
+Time handling distinguishes two clocks. A recorded state is usable when its observation
+time is at or before audit_at, even if the log or export containing it was captured later
+(a central log export captured after the audit still describes earlier events). A step may
+cite an artifact only when the artifact itself was captured at or before audit_at; the
+planner picks a citable observation with the same verdict, and a COMPLETE case whose
+only proof is uncitable stays pending rather than citing future evidence.
 
-## Chat Transcript
+Absence requires an explicit not-found readback or a covering inventory. Mixed
+inventories contribute negatives only when their contents establish subject
+coverage. An old negative lookup alone does not introduce an already-absent
+resource into a later request. Historical positives and linked copies remain searchable.
+A later primary readback does not erase a surviving regional replica.
 
-This repository includes [`AGENTS.md`](./AGENTS.md), which instructs compatible AI coding tools to append conversation summaries to `log.txt` in the repository root:
+Policies include DELETE, REDACT, ANONYMIZE, RETAIN, disabling flows, and blocking
+restores. Tombstones preserve stable references while removing direct identifiers.
+Required retained records remain available. The planner follows the mandated phase
+and operation order. Future actions have empty citations; completed verification
+cites the observation establishing the required state.
 
-| Platform | Path |
-| --- | --- |
-| macOS / Linux | `<repo root>/log.txt` |
-| Windows | `<repo root>\log.txt` |
+## Tests and evaluation
 
-- Always launch your AI coding agent from the repository root (or explicitly ask it to read `./AGENTS.md` first) so every turn is logged to `log.txt` with the required `User Prompt`, `Agent Response Summary`, `Actions`, and `Context` sections.
-- Upload `log.txt` directly as your `chat_transcript` submission on HackerRank.
-- Do not include API keys, tokens, credentials, or secrets in prompts, code, configuration, or `log.txt`.
+~~~powershell
+./.venv/Scripts/python.exe -m unittest discover -s code/tests -v
+./.venv/Scripts/python.exe code/evaluation/main.py
+~~~
 
----
+The evaluator runs independent tests and measures an explicitly labeled evidence-only
+diagnostic against all 32 public samples. Missing cases stay in denominators.
+After a real model-backed sample run, evaluate its generated CSV:
 
-## Packaging `code.zip` and Submission
+~~~powershell
+./.venv/Scripts/python.exe code/evaluation/main.py --predictions PATH_TO_GENERATED_SAMPLE_CSV
+~~~
 
-| Item | Description |
-| --- | --- |
-| `code.zip` | Runnable solution, prompts, configuration, `README.md`, and `evaluation/` reports |
-| `output.csv` | One answer row for each of the 518 requests in `dataset/deletion_requests.csv` |
-| `chat_transcript` | The root `log.txt` file generated by your coding agent |
-| AI interview | Live explanation of your architecture, approach, and evaluation |
+Metrics cover status, step precision/recall/F1, fields, exact sequences, and exact
+case agreement. The Markdown report includes definitions, participant-created
+scenarios, actual failures, and implemented changes. Only evaluation code reads
+expected sample answers. Hidden-label evaluation accuracy is unavailable locally.
 
-You may use any programming language, model, framework, or retrieval approach. Include clear setup and execution instructions in `README.md` inside `code.zip`.
+The [usage report](code/evaluation/usage_report.md) reports observed invocations,
+tokens, caches, and subscription assumptions. Cached input is a subset of input
+tokens and is not added twice. Failed runs are explicitly interim. Final usage
+must come from the production run that generated the complete output.
 
-To package `code.zip` from the repository root without bundling the dataset:
+## Development transcript and artifacts
 
-**macOS / Linux:**
+Follow AGENTS.md for the shared root log.txt. Preserve prior entries and their
+retrospective labels. Included development turns record the actual user prompt,
+factual actions/results, and harness/model identifiers from authoritative session
+metadata. Explicitly excluded turns are not backfilled. Runtime audit traces are
+separate from human development turns.
 
-```bash
-zip -r code.zip README.md code -x "*/__pycache__/*" "*/.venv/*" "*/venv/*" "*/node_modules/*" "*/.git/*" "*/.DS_Store"
-```
+code.zip contains source, prompts embedded in Python, pinned requirements, README,
+and evaluation Markdown reports. Reports are included under code/evaluation/ and
+archive-root evaluation/ to satisfy both documented layouts. Dataset files,
+environments, caches, credentials, transcripts, and nested archives are excluded.
+Packaging validates the completed output and checks archive integrity and hashes.
 
-**Windows (PowerShell):**
+Submit code.zip, root output.csv, and root log.txt as the chat transcript. Preserve
+relevant original traces separately as described in agent_trace_instructions.md.
+The repository does not configure an October deadline.
 
-```powershell
-Compress-Archive -Path README.md, code -DestinationPath code.zip -Force
-```
+Challenge: https://wwww.hackerrank.com/contests/hackerrank-orchestrate-october26/challenges/ghost-data-still-exists
 
-When packaging `code.zip`:
+## Runtime migration and current review
 
-- Keep your evaluation reports in `code/evaluation/` so they are bundled automatically with `code` (or add `evaluation` to the archive command above if you placed them in a top-level `evaluation/` directory).
-- Do **not** include `dataset/`, virtual environments (`.venv`, `venv`, `node_modules`), or build caches (`__pycache__`). On Windows, keep `.venv` at the repository root (outside `code/`) and remove any `code/__pycache__` folders before running `Compress-Archive`.
-- Do **not** include nested archives (`.zip`, `.tar`, `.gz`, `.tgz`, `.7z`, `.rar`) inside `code.zip` — submissions containing nested archive files will be rejected.
+The active inference adapter is the Claude Code CLI (`claude -p`) with `sonnet`, medium effort,
+and Claude subscription authentication. There is no API-key fallback. Provider/model/effort
+changes invalidate model response caches. The extraction cache version is bumped when
+classification rules change.
 
-Before submitting, confirm that:
-
-- `output.csv` has the exact header `case_id,deletion_status,steps_json` and contains all 518 data rows sorted by `case_id`;
-- every `steps_json` value is a valid JSON array with consecutive step numbers starting at `1`;
-- findings cite valid evidence IDs, and `COMPLETE` verification steps cite evidence proving the current state;
-- proposed remediation and future verification steps use an empty `evidence_id` (`""`);
-- `code.zip` includes your runnable code, `README.md`, `code/evaluation/evaluation_report.md`, and `code/evaluation/usage_report.md`;
-- `log.txt` follows the `AGENTS.md` turn format and is uploaded to the `chat_transcript` slot; and
-- no API keys, credentials, real personal data, or sensitive configuration values are included.
+Both observation and capture timestamps must be at or before audit_at. Later captures
+cannot change the answer. Extraction version 3 requires field-level readbacks before
+a visual tombstone can be marked REDACTED; a customer-key screen alone is insufficient.
